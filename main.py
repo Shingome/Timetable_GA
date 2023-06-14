@@ -50,12 +50,59 @@ def table_to_str(timetable, type):
 
 
 # Main evaluate
+
 def evaluateFunction(individual):
-    subjects, teachers, cabinets = individual_preprocessing(individual)
-    return evaluateSubject(subjects) + teacher_subject(subjects, teachers) + empty_cabinet(cabinets, subjects),
+    groups = split_groups(individual)
+    return sum(evaluateGroup(groups[i], i) for i in range(GROUPS)) + \
+           teacher_crossing(individual) + \
+           cabinet_crossing(individual),
 
 
-def individual_preprocessing(individual):
+def split_groups(groups):
+    return np.reshape(groups, (GROUPS, -1))
+
+
+# Evaluate group
+def evaluateGroup(group, group_id):
+    subjects, teachers, cabinets = group_preprocessing(group)
+    return evaluateSubject(subjects, group_id) \
+        + teacher_subject(subjects, teachers, group_id) \
+        + empty_cabinet(cabinets, subjects)
+
+
+def union(arr):
+    return sorted(set(itertools.chain(*arr)))
+
+
+def zero_timetable(arr):
+    return np.zeros((len(arr), DAYS * HOURS))
+
+
+def teacher_crossing(individual):
+    all_teachers = union(TEACHERS)
+    timetable = zero_timetable(all_teachers)
+
+    for group_id, group in zip(range(GROUPS), split_groups(individual)):
+        _, teachers, _ = group_preprocessing(group)
+        for i, teacher in zip(range(GROUP_SIZE), teachers):
+            timetable[all_teachers.index(TEACHERS[group_id][teacher])][i] += 1
+
+    return np.sum(timetable[timetable > 1]) * 1000
+
+
+def cabinet_crossing(individual):
+    all_cabinets = union(CABINETS)
+    timetable = zero_timetable(all_cabinets)
+
+    for group_id, group in zip(range(GROUPS), split_groups(individual)):
+        _, _, cabinets = group_preprocessing(group)
+        for i, cabinet in zip(range(GROUP_SIZE), cabinets):
+            timetable[all_cabinets.index(CABINETS[group_id][cabinet])][i] += 1
+
+    return np.sum(timetable[timetable > 1]) * 1000
+
+
+def group_preprocessing(individual):
     individual = np.array(individual)
     subjects = individual[::3]
     teachers = individual[1::3]
@@ -64,18 +111,8 @@ def individual_preprocessing(individual):
     return subjects, teachers, cabinets
 
 
-# Evaluate Timetable of teachers
-def evaluateTeacher(timetable_teachers):
-    pass
-
-
-def teacher_subject(subjects, teachers):
-    return sum((int(subjects[i] not in TEACHER_SUBJECT_NUM[teachers[i]]) for i in range(len(subjects)))) * 1000
-
-
-# Evaluate Timetable of cabinets
-def evaluateCabinet(timetable_cabinets):
-    pass
+def teacher_subject(subjects, teachers, group_id):
+    return sum((int(subjects[i] not in TEACHER_SUBJECT_NUM[group_id][teachers[i]]) for i in range(len(subjects)))) * 1000
 
 
 def empty_cabinet(cabinets, subjects):
@@ -83,19 +120,21 @@ def empty_cabinet(cabinets, subjects):
 
 
 # Evaluate Timetable of subjects
-def evaluateSubject(timetable_subjects):
-    return all_hours(timetable_subjects) + \
+def evaluateSubject(timetable_subjects, group_id):
+    return all_hours(timetable_subjects, group_id) + \
         first_hours(timetable_subjects) + \
         full_subject(timetable_subjects) + \
         empty_hours(timetable_subjects) + \
         last_hours(timetable_subjects)
 
 
-def all_hours(subjects):
-    fine = [0 for _ in range(len(NEEDS))]
+def all_hours(subjects, group_id):
+    needs = NEEDS[group_id]
+    fine = [0 for _ in range(len(needs))]
     for i in subjects:
         fine[i] += 1
-    return np.sum(np.abs(np.asarray(fine)[1:] - np.asarray(NEEDS[1:]))) * 1000
+    # return np.sum(np.abs(np.asarray(fine)[1:] - np.asarray(needs[1:]))) * 1000
+    return len(list(filter(lambda x: x[0] != x[1], zip(fine[1:], needs[1:])))) * 1000
 
 
 def first_hours(subjects):
@@ -114,33 +153,40 @@ def full_subject(subjects):
     return len(list(filter(lambda x: x[0] != x[1], get_pairs(subjects)))) * 10
 
 
+# Create individual
+def wrapper(func, *args):
+    def wrapped_func():
+        return func(*args)
+
+    return wrapped_func
+
+
+def group_random_fun():
+    return np.transpose(list(list(wrapper(random.randint, *bounds)
+                                  for bounds in ((0, len(sphere[i]) - 1)
+                                                 for i in range(GROUPS)))
+                             for sphere in (SUBJECTS, TEACHERS, CABINETS)))
+
+
+def individualCreator(container):
+    return \
+        container(itertools.chain(*[tools.initCycle(list, func, GROUP_SIZE // 3) for func in group_random_fun()]))
+
+
 # Mutation Func
-def CycleMutUniformInt(individual, low, up, indpb):
+def ownMutUniformInt(individual):
     def repeat(p_object, size):
-        return list(itertools.chain(*(p_object for _ in range(size // len(p_object)))))
+        return itertools.chain(*(p_object for _ in range(size // len(p_object))))
 
-    size = len(individual)
+    individual = split_groups(individual)
 
-    if not isinstance(low, Iterable):
-        raise IndexError("parameter low must be iterable")
-    else:
-        low = repeat(low, size)
+    for group in range(GROUPS):
+        for i, type in zip(range(GROUP_SIZE), repeat((0, 1, 2), GROUP_SIZE)):
+            sphere_size = len((SUBJECTS, TEACHERS, CABINETS)[type][group])
+            if random.random() < (1 / sphere_size):
+                individual[group][i] = random.randint(0, sphere_size - 1)
 
-    if not isinstance(up, Iterable):
-        raise IndexError("parameter up must be iterable")
-    else:
-        up = repeat(up, size)
-
-    for i, xl, xu in zip(range(size), low, up):
-        if random.random() < indpb:
-            individual[i] = random.randint(xl, xu)
-
-    return individual,
-
-# Create invidiaudual
-
-def individualCreator():
-    pass
+    return creator.Individual(individual.flatten()),
 
 
 if __name__ == "__main__":
@@ -149,25 +195,51 @@ if __name__ == "__main__":
     HOURS = 5 * 2 + 1
 
     # Teacher parameters
-    TEACHERS = ["", "БРЫЛЕВА А.А.", "СУТОВИЧ С.Г.", "ШАНДРИКОВ А.В.", "ШАППО М.М.", "КОЛЕСНИКОВИЧ М.В."]
-    TEACHER_SUBJECT = [[""], ["МАТЕМАТИКА", "РУССКИЙ"], ["ИСТОРИЯ"], ["БИОЛОГИЯ"], ["РУССКИЙ"], ["ИСТОРИЯ"]]
-    TEACHER_SUBJECT_NUM = [[0], [1, 4], [2], [3], [4], [2]]
+    TEACHERS = [
+        ["", "БРЫЛЕВА А.А.", "СУТОВИЧ С.Г.", "ШАНДРИКОВ А.В.", "ШАППО М.М.", "КОЛЕСНИКОВИЧ М.В."],
+        ["", "БРЫЛЕВА А.А.", "ГОРОШИН В.Б.", "ВЕЛИКОВ А.С."]
+    ]
+    TEACHER_SUBJECT = [
+        [
+            [""], ["МАТЕМАТИКА", "РУССКИЙ"], ["ИСТОРИЯ"], ["БИОЛОГИЯ"], ["РУССКИЙ"], ["ИСТОРИЯ"]
+        ],
+        [
+            [""], ["МАТЕМАТИКА", "РУССКИЙ"], ["ЧЕРЧЕНИЕ"], ["ГЕОГРАФИЯ"]
+        ]
+    ]
+    TEACHER_SUBJECT_NUM = [
+        [
+            [0], [1, 4], [2], [3], [4], [2]
+        ],
+        [
+            [0], [2, 3], [4], [1]
+        ]
+    ]
 
     # Cabinet parameters
-    CABINETS = ["", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"]
+    CABINETS = [
+        ["", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"],
+        ["", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"],
+    ]
 
     # Subject parameters
-    SUBJECTS = ["", "МАТЕМАТИКА", "ИСТОРИЯ", "БИОЛОГИЯ", "РУССКИЙ"]
-    NEEDS = [-1, 9, 9, 9, 9]
+    SUBJECTS = [
+        ["", "МАТЕМАТИКА", "ИСТОРИЯ", "БИОЛОГИЯ", "РУССКИЙ"],
+        ["", "ГЕОГРАФИЯ", "МАТЕМАТИКА", "РУССКИЙ", "ЧЕРЧЕНИЕ"],
+    ]
+    NEEDS = [
+        [-1, 9, 9, 9, 9],
+        [-1, 9, 9, 9, 9],
+    ]
 
     # Hyper parameters
-    GROUPS = 1
-    GROUP_SIZE = HOURS * DAYS
+    GROUPS = 2
+    GROUP_SIZE = HOURS * DAYS * 3
     INDIVIDUAL_SIZE = GROUP_SIZE * GROUPS
-    POPULATION_SIZE = 2000
+    POPULATION_SIZE = 3000
     P_CROSSOVER = 0.9
     P_MUTATION = 0.1
-    MAX_GENERATIONS = 1
+    MAX_GENERATIONS = 130
     TOURNAMENT_SIZE = 3
     HALL_OF_FAME_SIZE = 1
 
@@ -180,28 +252,21 @@ if __name__ == "__main__":
     creator.create("Individual", list, fitness=creator.FitnessMin)
 
     toolbox = base.Toolbox()
-    toolbox.register("randomSubjects", random.randint, 0, len(SUBJECTS) - 1)
-    toolbox.register("randomTeachers", random.randint, 0, len(TEACHERS) - 1)
-    toolbox.register("randomCabinets", random.randint, 0, len(CABINETS) - 1)
-    toolbox.register("individualCreator",
-                     tools.initCycle,
-                     creator.Individual,
-                     (toolbox.randomSubjects, toolbox.randomTeachers, toolbox.randomCabinets),
-                     INDIVIDUAL_SIZE)
+    toolbox.register("individualCreator", individualCreator, creator.Individual)
+
+    ind = toolbox.individualCreator()
+
     toolbox.register("populationCreator", tools.initRepeat, list, toolbox.individualCreator)
 
     population = toolbox.populationCreator(n=POPULATION_SIZE)
     toolbox.register("evaluate", evaluateFunction)
     toolbox.register("select", tools.selTournament, tournsize=TOURNAMENT_SIZE)
     toolbox.register("mate", tools.cxOnePoint)
-    toolbox.register("mutate",
-                     CycleMutUniformInt,
-                     low=[0, 0, 0],
-                     up=[len(SUBJECTS) - 1, len(TEACHERS) - 1, len(CABINETS) - 1],
-                     indpb=1.0 / len(SUBJECTS))
+    toolbox.register("mutate", ownMutUniformInt)
 
     stats = tools.Statistics(lambda ind: ind.fitness.values)
     stats.register("max", np.max)
+    stats.register("min", np.min)
     stats.register("avg", np.mean)
 
     population, logbook = algorithms.eaSimple(population, toolbox,
@@ -212,55 +277,56 @@ if __name__ == "__main__":
                                               halloffame=hof,
                                               verbose=True)
 
-    maxFitnessValues, meanFitnessValues = logbook.select("max", "avg")
+    maxFitnessValues, meanFitnessValues, minFitnessValues = logbook.select("max", "avg", "min")
 
     plt.plot(maxFitnessValues, color='red')
+    plt.plot(minFitnessValues, color='yellow')
     plt.plot(meanFitnessValues, color='green')
     plt.xlabel('Поколение')
-    plt.ylabel('Макс/средняя приспособленность')
-    plt.title('Зависимость максимальной и средней приспособленности от поколения')
+    plt.ylabel('Макс/Мин/Ср приспособленность')
+    plt.title('Зависимость максимальной, минимальной и средней приспособленности от поколения')
     plt.show()
 
     population = list(sorted(population, key=evaluateFunction))
 
+    # def tableSTR(individual):
+    #     subjects, teachers, cabinets = group_preprocessing(individual)
+    #     subjects = (SUBJECTS[i] for i in subjects)
+    #     teachers = (TEACHERS[i] for i in teachers)
+    #     cabinets = (CABINETS[i] for i in cabinets)
+    #
+    #     return np.array_split(np.array(list(zip(subjects, teachers, cabinets))).flatten(), DAYS)
+    #
+    #
+    # pd.DataFrame(tableSTR(hof[0])).to_excel("example.xlsx")
+    #
+    # timetable = hof[0]
+    #
+    # subject, teacher, cabinets = group_preprocessing(timetable)
+    #
+    # print("Fitness:", evaluateFunction(timetable))
+    # print("All hours:", all_hours(subject))
+    # print("First hours:", first_hours(subject))
+    # print("Empty hours:", empty_hours(subject))
+    # print("Full subject:", full_subject(subject))
+    # print("Last hours:", last_hours(subject))
+    # print("Teacher-Subject: ", teacher_subject(subject, teacher))
+    # print("Empty cabinets: ", empty_cabinet(cabinets, subject))
 
-    def tableSTR(individual):
-        subjects, teachers, cabinets = individual_preprocessing(individual)
-        subjects = (SUBJECTS[i] for i in subjects)
-        teachers = (TEACHERS[i] for i in teachers)
-        cabinets = (CABINETS[i] for i in cabinets)
-
-        return np.array_split(np.array(list(zip(subjects, teachers, cabinets))).flatten(), DAYS)
-
-
-    pd.DataFrame(tableSTR(hof[0])).to_excel("example.xlsx")
-
-    timetable = hof[0]
-
-    subject, teacher, cabinets = individual_preprocessing(timetable)
-
-    print("Fitness:", evaluateFunction(timetable))
-    print("All hours:", all_hours(subject))
-    print("First hours:", first_hours(subject))
-    print("Empty hours:", empty_hours(subject))
-    print("Full subject:", full_subject(subject))
-    print("Last hours:", last_hours(subject))
-    print("Teacher-Subject: ", teacher_subject(subject, teacher))
-    print("Empty cabinets: ", empty_cabinet(cabinets, subject))
-
-    def show_timetable(timetable, type):
-        timetable = pd.DataFrame(table_to_str(timetable, type), index="пн вт ср чт пт".split(" "))
-
-        plt.rcParams["figure.figsize"] = [20, 10]
-        plt.rcParams["figure.autolayout"] = True
-        fig, ax = plt.subplots()
-        fig.patch.set_visible(False)
-        ax.axis('off')
-        ax.axis('tight')
-        table = ax.table(cellText=timetable.values, colLabels=timetable.columns, loc='center')
-        fig.tight_layout()
-        plt.show()
-
-    show_timetable(subject, 0)
-    show_timetable(teacher, 1)
-    show_timetable(cabinets, 2)
+    # def show_timetable(timetable, type):
+    #     timetable = pd.DataFrame(table_to_str(timetable, type), index="пн вт ср чт пт".split(" "))
+    #
+    #     plt.rcParams["figure.figsize"] = [20, 10]
+    #     plt.rcParams["figure.autolayout"] = True
+    #     fig, ax = plt.subplots()
+    #     fig.patch.set_visible(False)
+    #     ax.axis('off')
+    #     ax.axis('tight')
+    #     table = ax.table(cellText=timetable.values, colLabels=timetable.columns, loc='center')
+    #     fig.tight_layout()
+    #     plt.show()
+    #
+    #
+    # show_timetable(subject, 0)
+    # show_timetable(teacher, 1)
+    # show_timetable(cabinets, 2)
