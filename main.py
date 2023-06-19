@@ -52,14 +52,14 @@ def table_to_str(timetable, type):
 # Main evaluate
 
 def evaluateFunction(individual):
-    groups = split_groups(individual)
+    groups = split_by_groups(individual)
     return sum(evaluateGroup(groups[i], i) for i in range(GROUPS)) + \
            teacher_crossing(individual) + \
            cabinet_crossing(individual),
 
 
-def split_groups(groups):
-    return np.reshape(groups, (GROUPS, -1))
+def split_by_groups(individual):
+    return np.reshape(individual, (GROUPS, -1))
 
 
 # Evaluate group
@@ -82,24 +82,24 @@ def teacher_crossing(individual):
     all_teachers = union(TEACHERS)
     timetable = zero_timetable(all_teachers)
 
-    for group_id, group in zip(range(GROUPS), split_groups(individual)):
+    for group_id, group in zip(range(GROUPS), split_by_groups(individual)):
         _, teachers, _ = group_preprocessing(group)
         for i, teacher in zip(range(GROUP_SIZE), teachers):
             timetable[all_teachers.index(TEACHERS[group_id][teacher])][i] += 1
 
-    return np.sum(timetable[timetable > 1]) * 1000
+    return np.sum(timetable[timetable > 1]) * 500
 
 
 def cabinet_crossing(individual):
     all_cabinets = union(CABINETS)
     timetable = zero_timetable(all_cabinets)
 
-    for group_id, group in zip(range(GROUPS), split_groups(individual)):
+    for group_id, group in zip(range(GROUPS), split_by_groups(individual)):
         _, _, cabinets = group_preprocessing(group)
         for i, cabinet in zip(range(GROUP_SIZE), cabinets):
             timetable[all_cabinets.index(CABINETS[group_id][cabinet])][i] += 1
 
-    return np.sum(timetable[timetable > 1]) * 1000
+    return np.sum(timetable[timetable > 1]) * 500
 
 
 def group_preprocessing(individual):
@@ -112,7 +112,8 @@ def group_preprocessing(individual):
 
 
 def teacher_subject(subjects, teachers, group_id):
-    return sum((int(subjects[i] not in TEACHER_SUBJECT_NUM[group_id][teachers[i]]) for i in range(len(subjects)))) * 1000
+    return sum(
+        (int(subjects[i] not in TEACHER_SUBJECT_NUM[group_id][teachers[i]]) for i in range(len(subjects)))) * 1000
 
 
 def empty_cabinet(cabinets, subjects):
@@ -178,7 +179,7 @@ def ownMutUniformInt(individual):
     def repeat(p_object, size):
         return itertools.chain(*(p_object for _ in range(size // len(p_object))))
 
-    individual = split_groups(individual)
+    individual = split_by_groups(individual)
 
     for group in range(GROUPS):
         for i, type in zip(range(GROUP_SIZE), repeat((0, 1, 2), GROUP_SIZE)):
@@ -239,8 +240,8 @@ if __name__ == "__main__":
     POPULATION_SIZE = 3000
     P_CROSSOVER = 0.9
     P_MUTATION = 0.1
-    MAX_GENERATIONS = 130
-    TOURNAMENT_SIZE = 3
+    MAX_GENERATIONS = 80
+    TOURNAMENT_SIZE = 5
     HALL_OF_FAME_SIZE = 1
 
     hof = tools.HallOfFame(HALL_OF_FAME_SIZE)
@@ -253,8 +254,6 @@ if __name__ == "__main__":
 
     toolbox = base.Toolbox()
     toolbox.register("individualCreator", individualCreator, creator.Individual)
-
-    ind = toolbox.individualCreator()
 
     toolbox.register("populationCreator", tools.initRepeat, list, toolbox.individualCreator)
 
@@ -289,44 +288,40 @@ if __name__ == "__main__":
 
     population = list(sorted(population, key=evaluateFunction))
 
-    # def tableSTR(individual):
-    #     subjects, teachers, cabinets = group_preprocessing(individual)
-    #     subjects = (SUBJECTS[i] for i in subjects)
-    #     teachers = (TEACHERS[i] for i in teachers)
-    #     cabinets = (CABINETS[i] for i in cabinets)
-    #
-    #     return np.array_split(np.array(list(zip(subjects, teachers, cabinets))).flatten(), DAYS)
-    #
-    #
-    # pd.DataFrame(tableSTR(hof[0])).to_excel("example.xlsx")
-    #
-    # timetable = hof[0]
-    #
-    # subject, teacher, cabinets = group_preprocessing(timetable)
-    #
-    # print("Fitness:", evaluateFunction(timetable))
-    # print("All hours:", all_hours(subject))
-    # print("First hours:", first_hours(subject))
-    # print("Empty hours:", empty_hours(subject))
-    # print("Full subject:", full_subject(subject))
-    # print("Last hours:", last_hours(subject))
-    # print("Teacher-Subject: ", teacher_subject(subject, teacher))
-    # print("Empty cabinets: ", empty_cabinet(cabinets, subject))
 
-    # def show_timetable(timetable, type):
-    #     timetable = pd.DataFrame(table_to_str(timetable, type), index="пн вт ср чт пт".split(" "))
-    #
-    #     plt.rcParams["figure.figsize"] = [20, 10]
-    #     plt.rcParams["figure.autolayout"] = True
-    #     fig, ax = plt.subplots()
-    #     fig.patch.set_visible(False)
-    #     ax.axis('off')
-    #     ax.axis('tight')
-    #     table = ax.table(cellText=timetable.values, colLabels=timetable.columns, loc='center')
-    #     fig.tight_layout()
-    #     plt.show()
-    #
-    #
-    # show_timetable(subject, 0)
-    # show_timetable(teacher, 1)
-    # show_timetable(cabinets, 2)
+    def ind_to_str(individual):
+        def sphere_to_str(sphere, sphere_str):
+            return list(itertools.chain(*([sphere_str[group_id][i] for i in group]
+                                          for group, group_id in zip(np.array_split(sphere, GROUPS), range(GROUPS)))))
+
+        individual = zip(sphere_to_str(sphere, sphere_str)
+                         for sphere, sphere_str in zip(group_preprocessing(individual), (SUBJECTS, TEACHERS, CABINETS)))
+
+        return list(itertools.chain(*individual))
+
+
+    def ind_to_table(individual):
+        individual = split_by_groups(list(zip(*ind_to_str(individual))))
+        return list(np.array_split(group, DAYS) for group in individual)
+
+
+    ind = hof[0]
+    table = ind_to_table(hof[0])
+    for i in range(len(table)):
+        pd.DataFrame(table[i]).to_excel(f"group_{i}.xlsx")
+
+    groups = split_by_groups(ind)
+    print("\nFitness:", evaluateFunction(ind))
+    print("Teacher_crossing:", teacher_crossing(ind))
+    print("Cabinet_crossing:", cabinet_crossing(ind))
+    for i in range(len(groups)):
+        subjects, teachers, cabinets = group_preprocessing(groups[i])
+
+        print(f"\ngroup_{i}")
+        print("All hours:", all_hours(subjects, i))
+        print("First hours:", first_hours(subjects))
+        print("Empty hours:", empty_hours(subjects))
+        print("Full subject:", full_subject(subjects))
+        print("Last hours:", last_hours(subjects))
+        print("Teacher-Subject: ", teacher_subject(subjects, teachers, i))
+        print("Empty cabinets: ", empty_cabinet(cabinets, subjects))
